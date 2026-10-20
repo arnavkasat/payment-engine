@@ -108,11 +108,19 @@ jobs:
           docker compose logs
           exit 1
 
-      - name: The worker is running and found its topic
+      - name: The worker is running the worker, and found its topic
         run: |
           docker compose ps
           docker compose logs worker
-          test "$(docker compose ps -q worker | xargs docker inspect -f '{{.State.Running}}')" = "true"
+          worker_id=$(docker compose ps -q worker)
+          test "$(docker inspect -f '{{.State.Running}}' "$worker_id")" = "true"
+          # The image's CMD is the API. If a future change turns it back
+          # into an ENTRYPOINT, compose's `command:` would be appended as
+          # arguments and this service would silently run a second API --
+          # which is exactly what happened once.
+          docker inspect -f '{{json .Config.Cmd}}' "$worker_id" | grep -q '/usr/local/bin/worker'
+          docker compose logs worker | grep -q "outbox publisher started"
+          docker compose logs worker | grep -q "settlement consumer started"
 
       - name: The dashboard is served
         run: |

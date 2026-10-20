@@ -1,7 +1,9 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -233,6 +235,29 @@ func TestFaultRequestValidation(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestClientCancellationIsNotAServerError guards the status mapping: a load
+// generator that hangs up on its own timeout must not make the API look
+// like it is failing.
+func TestClientCancellationIsNotAServerError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{"cancelled", context.Canceled, httpapi.StatusClientClosedRequest, "client_closed_request"},
+		{"deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "timeout"},
+		{"wrapped cancel", fmt.Errorf("reading payment: %w", context.Canceled), httpapi.StatusClientClosedRequest, "client_closed_request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := httpapi.Classify(tc.err)
+			if status != tc.want || code != tc.code {
+				t.Errorf("Classify = %d, %q; want %d, %q", status, code, tc.want, tc.code)
 			}
 		})
 	}

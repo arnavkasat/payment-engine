@@ -26,4 +26,9 @@ COPY --from=build /out/loadgen /usr/local/bin/loadgen
 
 USER nonroot:nonroot
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/api"]
+
+# CMD rather than ENTRYPOINT, so that `command:` in docker-compose (or an
+# argument to `docker run`) selects a different binary instead of being
+# appended as arguments to this one. With an ENTRYPOINT here, a compose
+# service asking for the worker would silently run a second copy of the API.
+CMD ["/usr/local/bin/api"]
