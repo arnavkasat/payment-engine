@@ -40,9 +40,14 @@ type Config struct {
 	// CreateTopic makes the worker create the topic at startup.
 	CreateTopic bool
 
-	// ClearingAccount and FeeAccount are looked up by name at startup.
+	// ClearingAccount and FeeAccount are name prefixes: the engine resolves
+	// ClearingShards accounts of each, named "<prefix>-00" upward.
 	ClearingAccount string
 	FeeAccount      string
+	// ClearingShards is how many clearing and fee accounts to spread writes
+	// across. Every capture locks one of each, so one account would
+	// serialise every write in the engine on a single row.
+	ClearingShards int
 
 	// OutboxBatch, OutboxInterval and OutboxLease tune the publisher.
 	OutboxBatch    int
@@ -80,6 +85,7 @@ func Default() Config {
 		CreateTopic:            true,
 		ClearingAccount:        "clearing",
 		FeeAccount:             "fees",
+		ClearingShards:         8,
 		OutboxBatch:            128,
 		OutboxInterval:         50 * time.Millisecond,
 		OutboxLease:            30 * time.Second,
@@ -134,6 +140,7 @@ func Load() (Config, error) {
 	}
 	intVar("OUTBOX_BATCH", &cfg.OutboxBatch)
 	intVar("KAFKA_PARTITIONS", &cfg.KafkaPartitions)
+	intVar("CLEARING_SHARDS", &cfg.ClearingShards)
 	intVar("KAFKA_REPLICATION_FACTOR", &cfg.KafkaReplicationFactor)
 	maxConns := int(cfg.DatabaseMaxConns)
 	intVar("DATABASE_MAX_CONNS", &maxConns)
@@ -196,6 +203,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: KAFKA_PARTITIONS must be positive, got %d", c.KafkaPartitions)
 	case c.KafkaReplicationFactor <= 0:
 		return fmt.Errorf("config: KAFKA_REPLICATION_FACTOR must be positive, got %d", c.KafkaReplicationFactor)
+	case c.ClearingShards <= 0:
+		return fmt.Errorf("config: CLEARING_SHARDS must be positive, got %d", c.ClearingShards)
 	case c.OutboxBatch <= 0:
 		return fmt.Errorf("config: OUTBOX_BATCH must be positive, got %d", c.OutboxBatch)
 	case c.DatabaseMaxConns <= 0:

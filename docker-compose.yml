@@ -68,9 +68,13 @@ services:
     environment:
       HTTP_ADDR: ":8080"
       DATABASE_URL: "postgres://payments:payments@postgres:5432/payments?sslmode=disable"
-      DATABASE_MAX_CONNS: "40"
+      DATABASE_MAX_CONNS: "60"
       KAFKA_BROKERS: "kafka:19092"
       KAFKA_TOPIC: "payments.events"
+      # The API and the worker must agree on this: the settlement consumer
+      # recomputes a payment's clearing shard from its id, so a mismatch
+      # would settle out of a different account than the capture went into.
+      CLEARING_SHARDS: "8"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       # The dashboard's fault controls. Safe here because this compose file
       # is a local demo; never set it on anything reachable.
@@ -88,6 +92,7 @@ services:
       KAFKA_BROKERS: "kafka:19092"
       KAFKA_TOPIC: "payments.events"
       CONSUMER_GROUP: "settlement"
+      CLEARING_SHARDS: "8"
       KAFKA_PARTITIONS: "6"
       OUTBOX_BATCH: "256"
       OUTBOX_INTERVAL: "20ms"

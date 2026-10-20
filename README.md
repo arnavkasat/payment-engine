@@ -363,7 +363,8 @@ Everything is read in [`internal/config`](internal/config/config.go) and nowhere
 | `KAFKA_PARTITIONS` | `6` | partition count used when creating the topic; the ceiling on settlement concurrency |
 | `KAFKA_REPLICATION_FACTOR` | `1` | must not exceed the broker count |
 | `KAFKA_CREATE_TOPIC` | `true` | the worker creates the topic at startup |
-| `CLEARING_ACCOUNT` / `FEE_ACCOUNT` | `clearing` / `fees` | resolved by name at startup |
+| `CLEARING_ACCOUNT` / `FEE_ACCOUNT` | `clearing` / `fees` | name prefixes; shards are `clearing-00` upward |
+| `CLEARING_SHARDS` | `8` | clearing/fee accounts to spread writes across; **the API and worker must agree** |
 | `OUTBOX_BATCH` | `128` | |
 | `OUTBOX_INTERVAL` | `50ms` | poll delay after an empty pass |
 | `OUTBOX_LEASE` | `30s` | must exceed a publish; validated at startup |

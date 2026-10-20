@@ -29,11 +29,13 @@ const (
 
 // Config wires the service to its collaborators.
 type Config struct {
-	// Clearing is the account captured funds are held in until settlement.
-	Clearing uuid.UUID
-	// Fees is the revenue account fees are credited to. It may be nil when
-	// the deployment never charges fees.
-	Fees uuid.UUID
+	// Clearing holds captured funds until settlement. It is a list because
+	// every write in the engine posts against it, so a single account would
+	// serialise the whole system on one row; see shard.go.
+	Clearing []uuid.UUID
+	// Fees are the revenue accounts fees are credited to, sharded for the
+	// same reason. Empty means the deployment charges no fees.
+	Fees []uuid.UUID
 	// External is the counterparty account deposits are drawn from. It may
 	// be nil, which disables deposits.
 	External uuid.UUID
@@ -58,8 +60,8 @@ func New(store storage.Store, cfg Config) (*Service, error) {
 	if store == nil {
 		return nil, fmt.Errorf("payments: store is required")
 	}
-	if cfg.Clearing == uuid.Nil {
-		return nil, fmt.Errorf("payments: clearing account is required")
+	if err := validateShards(cfg.Clearing); err != nil {
+		return nil, err
 	}
 	now := cfg.Clock
 	if now == nil {
@@ -256,7 +258,8 @@ func (s *Service) capture(ctx context.Context, tx storage.Tx, req CreateRequest)
 		UpdatedAt:      now,
 	}
 
-	entry, err := ledger.NewCapture(payment.ID, req.PayerAccount, s.cfg.Clearing, s.cfg.Fees,
+	entry, err := ledger.NewCapture(payment.ID, req.PayerAccount,
+		s.clearingFor(payment.ID), s.feesFor(payment.ID),
 		req.Currency, req.Amount, req.Fee, now)
 	if err != nil {
 		return storage.Payment{}, err
@@ -321,7 +324,10 @@ func (s *Service) HandleCaptured(ctx context.Context, tx storage.Tx, m events.Me
 	}
 
 	now := s.now()
-	entry, err := ledger.NewSettlement(payment.ID, s.cfg.Clearing, payment.PayeeAccount, payment.Currency, payment.Amount, now)
+	// The same shard the capture used, derived from the payment id rather
+	// than stored, so the funds come out of the account they went into.
+	entry, err := ledger.NewSettlement(payment.ID, s.clearingFor(payment.ID),
+		payment.PayeeAccount, payment.Currency, payment.Amount, now)
 	if err != nil {
 		return err
 	}

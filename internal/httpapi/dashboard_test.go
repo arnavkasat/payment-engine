@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/arnavkasat/payment-engine/internal/faults"
 	"github.com/arnavkasat/payment-engine/internal/httpapi"
 	"github.com/arnavkasat/payment-engine/internal/metrics"
@@ -153,7 +155,7 @@ func faultAPI(t *testing.T) (*apiHarness, *faults.Injector) {
 	h := newAPI(t)
 	injector := faults.New(1)
 	svc, err := payments.New(h.store, payments.Config{
-		Clearing: h.clearing, Fees: h.fees, External: h.world,
+		Clearing: []uuid.UUID{h.clearing}, Fees: []uuid.UUID{h.fees}, External: h.world,
 		Faults: injector, Metrics: metrics.NewRegistry(),
 	})
 	if err != nil {

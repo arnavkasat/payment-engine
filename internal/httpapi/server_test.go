@@ -51,7 +51,7 @@ func newAPI(t *testing.T) *apiHarness {
 	h.fees = mk("fees", storage.KindRevenue, false)
 
 	svc, err := payments.New(store, payments.Config{
-		Clearing: h.clearing, Fees: h.fees, External: h.world, Metrics: reg,
+		Clearing: []uuid.UUID{h.clearing}, Fees: []uuid.UUID{h.fees}, External: h.world, Metrics: reg,
 	})
 	if err != nil {
 		t.Fatalf("payments.New: %v", err)

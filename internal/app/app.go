@@ -43,8 +43,8 @@ type App struct {
 	// EnableFaultInjection is set, and a nil injector never fires.
 	Faults *faults.Injector
 
-	Clearing uuid.UUID
-	Fees     uuid.UUID
+	Clearing []uuid.UUID
+	Fees     []uuid.UUID
 	External uuid.UUID
 }
 
@@ -102,6 +102,8 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	a.Service = svc
+	log.Info("ledger accounts resolved",
+		"clearing_shards", len(a.Clearing), "fee_shards", len(a.Fees))
 	return a, nil
 }
 
@@ -111,8 +113,11 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 func (a *App) bootstrap(ctx context.Context) error {
 	wanted := []storage.Account{
 		{Name: ExternalAccount, Currency: "USD", Kind: storage.KindExternal, AllowNegative: true},
-		{Name: a.Config.ClearingAccount, Currency: "USD", Kind: storage.KindClearing},
-		{Name: a.Config.FeeAccount, Currency: "USD", Kind: storage.KindRevenue},
+	}
+	for i := 0; i < a.Config.ClearingShards; i++ {
+		wanted = append(wanted,
+			storage.Account{Name: shardName(a.Config.ClearingAccount, i), Currency: "USD", Kind: storage.KindClearing},
+			storage.Account{Name: shardName(a.Config.FeeAccount, i), Currency: "USD", Kind: storage.KindRevenue})
 	}
 	for _, want := range wanted {
 		if want.Name == "" {
@@ -131,20 +136,30 @@ func (a *App) bootstrap(ctx context.Context) error {
 	return nil
 }
 
+// shardName renders the account name for one shard.
+func shardName(prefix string, i int) string {
+	return fmt.Sprintf("%s-%02d", prefix, i)
+}
+
 // resolveAccounts looks up the accounts the service posts against.
 func (a *App) resolveAccounts(ctx context.Context) error {
-	clearing, err := a.Store.GetAccountByName(ctx, a.Config.ClearingAccount)
-	if err != nil {
-		return fmt.Errorf("app: clearing account %q: %w", a.Config.ClearingAccount, err)
-	}
-	a.Clearing = clearing.ID
-
-	if a.Config.FeeAccount != "" {
-		fees, err := a.Store.GetAccountByName(ctx, a.Config.FeeAccount)
+	for i := 0; i < a.Config.ClearingShards; i++ {
+		name := shardName(a.Config.ClearingAccount, i)
+		clearing, err := a.Store.GetAccountByName(ctx, name)
 		if err != nil {
-			return fmt.Errorf("app: fee account %q: %w", a.Config.FeeAccount, err)
+			return fmt.Errorf("app: clearing account %q: %w", name, err)
 		}
-		a.Fees = fees.ID
+		a.Clearing = append(a.Clearing, clearing.ID)
+
+		if a.Config.FeeAccount == "" {
+			continue
+		}
+		feeName := shardName(a.Config.FeeAccount, i)
+		fees, err := a.Store.GetAccountByName(ctx, feeName)
+		if err != nil {
+			return fmt.Errorf("app: fee account %q: %w", feeName, err)
+		}
+		a.Fees = append(a.Fees, fees.ID)
 	}
 
 	external, err := a.Store.GetAccountByName(ctx, ExternalAccount)

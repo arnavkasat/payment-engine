@@ -139,38 +139,61 @@ bypassed the marker cannot settle a settled payment. And beneath that, a partial
 allows only one capture and one settlement row per payment. Three independent layers, because
 the cost of each is a few lines and the cost of a double settlement is real money.
 
-## The clearing account is the settlement bottleneck
+## Clearing and fee accounts are sharded
 
-Every settlement debits the same clearing account. PostgreSQL takes a row lock
-on it, so settlements against one clearing account are **fully serialised**, no
-matter how many partitions the topic has or how many consumers are in the group.
-Settlement throughput is therefore roughly `1 / (settlement transaction latency)`
-— a few hundred a second against a local database, fewer across a network.
+Every capture posts a leg against a clearing account and another against a fee
+account, and every settlement posts against clearing again. With one account of
+each kind, PostgreSQL takes a row lock on the same two rows for **every write in
+the system** — so the engine serialises on them regardless of how many API
+replicas, topic partitions or consumers are running. Captures do not escape this
+by touching different wallets; the clearing leg is in the same transaction.
 
-Captures do not share this limit: they touch the payer's own row, so payments
-between different wallets commit in parallel. It is only the clearing leg that
-queues. The consequence is that a burst of captures can be absorbed far faster
-than it can be settled, which is exactly why captured funds pile up visibly in
-clearing rather than disappearing into a queue somewhere.
+This is not a theoretical limit. The first full-stack CI run of this repository
+hit it directly, and the database said so:
 
-This is a deliberate trade, not an oversight: one clearing account makes the
-"did everything settle?" check a single balance read, which is the strongest
-assertion in the whole test suite. The ways out, in rough order of how much they
-cost:
+```
+ERROR:  canceling statement due to user request
+CONTEXT:  while locking tuple (11,90) in relation "accounts"
+STATEMENT:  SELECT ... FROM accounts WHERE id = ANY($1) ORDER BY id FOR UPDATE
+```
 
-1. **Shard the clearing account.** `clearing-00` … `clearing-15`, picked by a
-   hash of the payment id. Settlements then spread across sixteen rows and the
-   invariant check becomes a sum over sixteen instead of a read of one.
-2. **Batch settlements.** Handle a run of messages in one transaction, touching
-   the clearing row once for the batch rather than once per payment. Delivery is
-   already at-least-once and the markers are per-message, so a batch that fails
-   is simply redelivered and deduplicated.
-3. **Settle per payee rather than through clearing.** This removes the shared
-   row but gives up the named in-flight state that makes the whole thing
-   auditable, so it is the option to reach for last.
+Captures were queued behind each other on the clearing row until their request
+deadline expired. The ledger stayed perfectly correct throughout — nothing was
+lost and the books balanced — it simply could not go any faster than one
+transaction at a time.
 
-Sharding is the one to do first; it is a change to one function and a wider
-invariant query, and nothing else in the design moves.
+So the engine runs `CLEARING_SHARDS` accounts of each kind, named `clearing-00`
+upward, and picks one per payment from the payment id:
+
+```go
+binary.BigEndian.Uint32(id[12:16]) % uint32(n)
+```
+
+The last four bytes are used because the earlier ones carry a v4 UUID's version
+and variant bits and would skew the distribution. The shard is **derived, never
+stored**: a settlement recomputes it from the payment id and finds the same
+account its capture used, with no extra read.
+
+Three consequences worth knowing:
+
+- **Nothing about the invariants changes.** The shards are ordinary accounts, so
+  the books still sum to zero across them, and "is anything still in flight?"
+  becomes a sum over the clearing-kind accounts instead of a single read. The
+  dashboard and the CI drain check already do exactly that.
+- **The API and the worker must agree on the shard count.** If they disagree, a
+  settlement computes a different index than its capture did and posts against
+  the wrong account. Value is still conserved, so the zero-sum rules stay happy
+  — but one shard drifts negative, and because clearing accounts forbid
+  overdrafts, `no_unauthorised_overdraft` catches the misconfiguration. The
+  compose file sets `CLEARING_SHARDS` explicitly on both services rather than
+  relying on the default.
+- **Shard count is a ceiling, not a target.** It bounds how many writes can
+  commit concurrently; past the point where the payer rows are the contended
+  ones, adding shards buys nothing.
+
+The chaos harness deliberately runs a single shard: it is testing correctness
+under failure, and one clearing account makes "did everything settle?" a single
+balance read.
 
 ## Offset commits are batched, on purpose
 

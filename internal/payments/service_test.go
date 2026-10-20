@@ -62,8 +62,8 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	svc, err := payments.New(store, payments.Config{
-		Clearing: h.clearing.ID,
-		Fees:     h.fees.ID,
+		Clearing: []uuid.UUID{h.clearing.ID},
+		Fees:     []uuid.UUID{h.fees.ID},
 		External: h.world.ID,
 		Faults:   h.injector,
 		Metrics:  h.metrics,

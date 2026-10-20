@@ -173,8 +173,11 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	// One shard: the harness is testing correctness under failure, and a
+	// single clearing account makes "did everything settle?" a single
+	// balance read. Throughput sharding is orthogonal and tested elsewhere.
 	svc, err := payments.New(opts.Store, payments.Config{
-		Clearing: clearing, Fees: fees, External: world,
+		Clearing: []uuid.UUID{clearing}, Fees: []uuid.UUID{fees}, External: world,
 		Faults: injector, Metrics: reg,
 	})
 	if err != nil {
