@@ -139,6 +139,39 @@ bypassed the marker cannot settle a settled payment. And beneath that, a partial
 allows only one capture and one settlement row per payment. Three independent layers, because
 the cost of each is a few lines and the cost of a double settlement is real money.
 
+## The clearing account is the settlement bottleneck
+
+Every settlement debits the same clearing account. PostgreSQL takes a row lock
+on it, so settlements against one clearing account are **fully serialised**, no
+matter how many partitions the topic has or how many consumers are in the group.
+Settlement throughput is therefore roughly `1 / (settlement transaction latency)`
+— a few hundred a second against a local database, fewer across a network.
+
+Captures do not share this limit: they touch the payer's own row, so payments
+between different wallets commit in parallel. It is only the clearing leg that
+queues. The consequence is that a burst of captures can be absorbed far faster
+than it can be settled, which is exactly why captured funds pile up visibly in
+clearing rather than disappearing into a queue somewhere.
+
+This is a deliberate trade, not an oversight: one clearing account makes the
+"did everything settle?" check a single balance read, which is the strongest
+assertion in the whole test suite. The ways out, in rough order of how much they
+cost:
+
+1. **Shard the clearing account.** `clearing-00` … `clearing-15`, picked by a
+   hash of the payment id. Settlements then spread across sixteen rows and the
+   invariant check becomes a sum over sixteen instead of a read of one.
+2. **Batch settlements.** Handle a run of messages in one transaction, touching
+   the clearing row once for the batch rather than once per payment. Delivery is
+   already at-least-once and the markers are per-message, so a batch that fails
+   is simply redelivered and deduplicated.
+3. **Settle per payee rather than through clearing.** This removes the shared
+   row but gives up the named in-flight state that makes the whole thing
+   auditable, so it is the option to reach for last.
+
+Sharding is the one to do first; it is a change to one function and a wider
+invariant query, and nothing else in the design moves.
+
 ## Offset commits are batched, on purpose
 
 kafka-go can commit an offset synchronously after every message. The engine does

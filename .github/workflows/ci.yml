@@ -79,6 +79,12 @@ jobs:
   end-to-end:
     name: Full stack smoke test
     runs-on: ubuntu-latest
+
+    env:
+      # The API logs every request at info. Ten seconds of load would bury
+      # the diagnostics below under tens of thousands of lines.
+      LOG_LEVEL: warn
+
     steps:
       - uses: actions/checkout@v4
 
@@ -102,13 +108,19 @@ jobs:
           docker compose logs
           exit 1
 
+      - name: The worker is running and found its topic
+        run: |
+          docker compose ps
+          docker compose logs worker
+          test "$(docker compose ps -q worker | xargs docker inspect -f '{{.State.Running}}')" = "true"
+
       - name: The dashboard is served
         run: |
           curl -sf http://localhost:8080/ | grep -q "Payment engine"
           curl -sf http://localhost:8080/v1/ledger/snapshot | python3 -m json.tool > /dev/null
 
       - name: Drive traffic through the whole pipeline
-        run: go run ./cmd/loadgen -url http://localhost:8080 -concurrency 8 -duration 10s -warmup 2s
+        run: go run ./cmd/loadgen -url http://localhost:8080 -concurrency 8 -requests 2000 -wallets 16 -warmup 2s
 
       - name: Wait for settlement to drain
         run: |
@@ -124,7 +136,9 @@ jobs:
             sleep 2
           done
           echo "settlement did not drain"
-          docker compose logs --tail 200 worker
+          docker compose ps
+          echo "--- worker ---"; docker compose logs --tail 120 worker
+          echo "--- kafka ---";  docker compose logs --tail 60 kafka
           exit 1
 
       - name: Verify ledger invariants
@@ -135,7 +149,7 @@ jobs:
 
       - name: Logs on failure
         if: failure()
-        run: docker compose logs
+        run: docker compose logs --tail 80
 
       - name: Tear down
         if: always()

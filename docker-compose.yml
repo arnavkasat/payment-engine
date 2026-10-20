@@ -71,7 +71,7 @@ services:
       DATABASE_MAX_CONNS: "40"
       KAFKA_BROKERS: "kafka:19092"
       KAFKA_TOPIC: "payments.events"
-      LOG_LEVEL: "info"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
       # The dashboard's fault controls. Safe here because this compose file
       # is a local demo; never set it on anything reachable.
       ENABLE_FAULT_INJECTION: "true"
@@ -91,7 +91,7 @@ services:
       KAFKA_PARTITIONS: "6"
       OUTBOX_BATCH: "256"
       OUTBOX_INTERVAL: "20ms"
-      LOG_LEVEL: "info"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
     depends_on:
       postgres:
         condition: service_healthy

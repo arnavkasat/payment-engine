@@ -51,6 +51,11 @@ path than a capture — one indexed lookup, no locks, no writes — so a high re
 throughput. Reporting a number achieved at `-retry-rate 0.9` without saying so would be
 dishonest.
 
+**Settlement is serialised on the clearing account**, so its ceiling is
+independent of capture throughput and of the partition count — see
+`docs/ARCHITECTURE.md`. Measuring capture rate and calling it the engine's
+throughput would be measuring the easy half.
+
 **The consumer's commit interval.** Settlement throughput is bounded by how often
 the consumer flushes offsets. The default batches them every 100ms; setting
 `CommitInterval` negative restores one synchronous broker round trip per message,
