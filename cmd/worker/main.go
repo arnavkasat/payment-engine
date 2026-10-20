@@ -57,6 +57,21 @@ func run() error {
 	defer func() { _ = application.Close() }()
 	application.LogBalances(startCtx)
 
+	// Both halves need the topic to exist: a publisher cannot write to a
+	// missing topic and a consumer group cannot subscribe to one.
+	if cfg.CreateTopic {
+		if err := kafkaevents.EnsureTopic(startCtx, kafkaevents.TopicConfig{
+			Brokers:           cfg.KafkaBrokers,
+			Topic:             cfg.KafkaTopic,
+			Partitions:        cfg.KafkaPartitions,
+			ReplicationFactor: cfg.KafkaReplicationFactor,
+		}); err != nil {
+			return err
+		}
+		application.Log.Info("topic ready",
+			"topic", cfg.KafkaTopic, "partitions", cfg.KafkaPartitions)
+	}
+
 	var wg sync.WaitGroup
 	errc := make(chan error, 2)
 
@@ -75,6 +90,7 @@ func run() error {
 			Batch:    cfg.OutboxBatch,
 			Interval: cfg.OutboxInterval,
 			Lease:    cfg.OutboxLease,
+			Faults:   application.Faults,
 			Metrics:  application.Metrics,
 			Logger:   application.Log,
 		})
@@ -94,6 +110,7 @@ func run() error {
 	if consumeEnabled {
 		processor, err := consumer.New(application.Store, consumer.Config{
 			Group:   cfg.ConsumerGroup,
+			Faults:  application.Faults,
 			Metrics: application.Metrics,
 			Logger:  application.Log,
 		})

@@ -69,6 +69,7 @@ func run() error {
 		Service: application.Service,
 		Store:   application.Store,
 		Metrics: application.Metrics,
+		Faults:  application.Faults,
 		Logger:  application.Log,
 	})
 	if err != nil {
@@ -124,6 +125,7 @@ func runEmbeddedPipeline(ctx context.Context, application *app.App) (func(), err
 		Batch:    application.Config.OutboxBatch,
 		Interval: application.Config.OutboxInterval,
 		Lease:    application.Config.OutboxLease,
+		Faults:   application.Faults,
 		Metrics:  application.Metrics,
 		Logger:   application.Log,
 	})
@@ -132,6 +134,7 @@ func runEmbeddedPipeline(ctx context.Context, application *app.App) (func(), err
 	}
 	processor, err := consumer.New(application.Store, consumer.Config{
 		Group:   application.Config.ConsumerGroup,
+		Faults:  application.Faults,
 		Metrics: application.Metrics,
 		Logger:  application.Log,
 	})

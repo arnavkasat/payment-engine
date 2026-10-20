@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/arnavkasat/payment-engine/internal/faults"
 	"github.com/arnavkasat/payment-engine/internal/metrics"
 	"github.com/arnavkasat/payment-engine/internal/payments"
 	"github.com/arnavkasat/payment-engine/internal/storage"
@@ -34,6 +35,9 @@ type Config struct {
 	Store storage.Store
 	// Metrics is exposed at /metrics. Nil disables the endpoint.
 	Metrics *metrics.Registry
+	// Faults, when non-nil, exposes /v1/faults so the dashboard can arm the
+	// pipeline's failure-injection points at runtime.
+	Faults *faults.Injector
 	// Logger receives request logs. Nil discards them.
 	Logger *slog.Logger
 }
@@ -43,6 +47,7 @@ type Server struct {
 	svc     *payments.Service
 	store   storage.Store
 	metrics *metrics.Registry
+	faults  *faults.Injector
 	log     *slog.Logger
 	mux     *http.ServeMux
 }
@@ -55,7 +60,10 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
-	s := &Server{svc: cfg.Service, store: cfg.Store, metrics: cfg.Metrics, log: cfg.Logger, mux: http.NewServeMux()}
+	s := &Server{
+		svc: cfg.Service, store: cfg.Store, metrics: cfg.Metrics,
+		faults: cfg.Faults, log: cfg.Logger, mux: http.NewServeMux(),
+	}
 	if s.metrics != nil {
 		s.metrics.DefineCounter(MetricRequests, "HTTP requests by route, method and status class.")
 		s.metrics.DefineCounter(MetricPanics, "Handler panics recovered.")
@@ -76,10 +84,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/accounts/{id}/deposits", s.deposit)
 
 	s.mux.HandleFunc("GET /v1/ledger/invariants", s.verifyInvariants)
+	s.mux.HandleFunc("GET /v1/ledger/snapshot", s.getSnapshot)
+
+	s.mux.HandleFunc("GET /v1/faults", s.getFaults)
+	s.mux.HandleFunc("POST /v1/faults", s.setFaults)
 
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 	s.mux.HandleFunc("GET /readyz", s.readyz)
 	s.mux.HandleFunc("GET /metrics", s.metricsHandler)
+
+	s.mux.HandleFunc("GET /", s.dashboard)
 }
 
 // ServeHTTP satisfies http.Handler.

@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment Engine</title>
+<style>
+/* Design tokens. Dark values are selected steps for the dark surface, not an
+   automatic inversion, and are declared under both the OS media query and the
+   explicit theme stamp so the in-page toggle wins either way. */
+:root {
+  color-scheme: light;
+  --plane:        #f9f9f7;
+  --surface:      #fcfcfb;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --muted:        #898781;
+  --grid:         #e1e0d9;
+  --axis:         #c3c2b7;
+  --border:       rgba(11, 11, 11, 0.10);
+  --series:       #2a78d6;
+  --series-soft:  rgba(42, 120, 214, 0.14);
+  --good:         #0ca30c;
+  --critical:     #d03b3b;
+  --warning:      #fab219;
+  --radius:       10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series: #3987e5; --series-soft: rgba(57, 135, 229, 0.18);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7;
+  --muted: #898781; --grid: #2c2c2a; --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --series: #3987e5; --series-soft: rgba(57, 135, 229, 0.18);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--plane); color: var(--ink);
+  font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; margin-bottom: 20px; }
+header .title { flex: 1 1 280px; min-width: 0; }
+h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h1 .dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--good); margin-right: 8px; vertical-align: 2px;
+}
+h1 .dot.stale { background: var(--warning); }
+h1 .dot.down  { background: var(--critical); }
+.sub { color: var(--ink-2); font-size: 13px; margin-top: 3px; }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* A status badge always pairs a glyph and a word with its colour: the
+   good/critical hues are a red-green pair and are not distinguishable under
+   deuteranopia, so colour never carries the meaning on its own. */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+  white-space: nowrap;
+}
+.badge .glyph { font-weight: 700; }
+.badge.good     { color: var(--good);     border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+.badge.critical { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, transparent); }
+
+button {
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 13px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--axis); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--series); border-color: var(--series); color: #fff; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+.card h2 {
+  font-size: 13px; font-weight: 600; margin: 0 0 2px; letter-spacing: 0.01em;
+}
+.card .hint { color: var(--ink-2); font-size: 12.5px; margin: 0 0 14px; }
+
+/* Hero figure: exactly one per view, proportional figures. */
+.hero { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-end; }
+.hero .figure { font-size: 52px; font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
+.hero .unit { font-size: 20px; color: var(--ink-2); font-weight: 500; }
+.hero .caption { color: var(--ink-2); font-size: 12.5px; max-width: 46ch; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 13px 15px;
+}
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 25px; font-weight: 600; margin-top: 3px; letter-spacing: -0.01em; }
+.tile .note  { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.tile .value.good     { color: var(--good); }
+.tile .value.critical { color: var(--critical); }
+
+figure { margin: 0; }
+figcaption { color: var(--ink-2); font-size: 12.5px; margin-bottom: 10px; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: 190px; overflow: visible; }
+.tip {
+  position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px 9px; font-size: 12px; white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0,0,0,.14); transform: translate(-50%, -100%);
+}
+.tip .t-val { font-weight: 600; }
+.tip .t-time { color: var(--ink-2); font-size: 11px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-weight: 500; color: var(--ink-2); font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 0 10px 7px; border-bottom: 1px solid var(--grid);
+}
+td { padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+tr:last-child td { border-bottom: none; }
+/* Columns of numbers align; standalone figures stay proportional. */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.kind {
+  font-size: 11px; color: var(--ink-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 7px;
+}
+tr.total td { font-weight: 600; border-top: 1px solid var(--axis); }
+
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.steps { display: grid; gap: 10px; }
+.step {
+  display: grid; grid-template-columns: 26px 1fr; gap: 11px;
+  align-items: start; padding: 11px 13px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--plane);
+}
+.step .n {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--series); color: #fff; font-size: 11px; font-weight: 700;
+}
+.step .what { font-weight: 500; }
+.step .detail { color: var(--ink-2); font-size: 12.5px; margin-top: 3px; }
+.step code, code.inline {
+  font-family: var(--mono); font-size: 12px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  padding: 1px 5px; border-radius: 4px;
+}
+.step.ok  .n { background: var(--good); }
+.step.bad .n { background: var(--critical); }
+
+.verdict {
+  margin-top: 12px; padding: 12px 14px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--good) 40%, transparent);
+  background: color-mix(in srgb, var(--good) 8%, transparent);
+  font-size: 13px;
+}
+.verdict.bad {
+  border-color: color-mix(in srgb, var(--critical) 45%, transparent);
+  background: color-mix(in srgb, var(--critical) 8%, transparent);
+}
+
+/* The journal, drawn the way a ledger is read: debits left, credits right. */
+.entry { border: 1px solid var(--border); border-radius: 9px; margin-top: 11px; overflow: hidden; }
+.entry .head {
+  display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--plane); border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--ink-2);
+}
+.entry .head .k { font-weight: 600; color: var(--ink); text-transform: capitalize; }
+.tacct { display: grid; grid-template-columns: 1fr 1fr; }
+.tacct > div { padding: 9px 12px; }
+.tacct > div:first-child { border-right: 1px solid var(--grid); }
+.tacct .ttl {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin-bottom: 5px;
+}
+.leg { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; }
+.leg .amt { font-variant-numeric: tabular-nums; }
+.sumline {
+  padding: 7px 12px; border-top: 1px solid var(--grid); font-size: 12.5px;
+  display: flex; justify-content: space-between; background: var(--plane);
+}
+
+.faults { display: grid; gap: 9px; }
+.fault {
+  padding: 11px 13px; border: 1px solid var(--border);
+  border-radius: 9px; background: var(--plane);
+}
+.fault .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.fault .pt { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.fault .desc { color: var(--ink-2); font-size: 12.5px; margin-top: 5px; }
+.fault .fired { margin-left: auto; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.fault input[type=range] { width: 108px; accent-color: var(--series); }
+.fault .pct { font-size: 12px; color: var(--ink-2); width: 36px; font-variant-numeric: tabular-nums; }
+
+.violations { margin: 0; padding-left: 18px; font-size: 13px; color: var(--critical); }
+.muted { color: var(--ink-2); }
+.err { color: var(--critical); font-size: 13px; }
+details.api summary { cursor: pointer; color: var(--ink-2); font-size: 12.5px; }
+details.api pre {
+  font-family: var(--mono); font-size: 11.5px; overflow-x: auto;
+  background: var(--plane); padding: 10px; border-radius: 7px; border: 1px solid var(--border);
+}
+@media (max-width: 560px) { .tacct { grid-template-columns: 1fr; } .tacct > div:first-child { border-right: none; border-bottom: 1px solid var(--grid); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="title">
+    <h1><span class="dot" id="live-dot"></span>Payment engine</h1>
+    <div class="sub">Double-entry ledger · idempotency keys · transactional outbox · exactly-once settlement</div>
+  </div>
+  <div class="header-actions">
+    <span class="badge" id="invariant-badge"><span class="glyph">·</span><span>checking</span></span>
+    <button id="theme-toggle" title="Toggle colour scheme">Theme</button>
+  </div>
+</header>
+
+<div class="card">
+  <div class="hero">
+    <div>
+      <div class="sub" style="margin-bottom:6px">Money in flight</div>
+      <div><span class="figure" id="hero-clearing">—</span> <span class="unit" id="hero-cur"></span></div>
+    </div>
+    <p class="caption">
+      Captured funds held in the clearing account, between leaving the payer and
+      reaching the payee. Every capture adds exactly its amount and every
+      settlement removes exactly its amount, so this returning to zero is proof
+      that every capture that ever committed has settled.
+    </p>
+  </div>
+</div>
+
+<div class="tiles" style="margin-bottom:16px">
+  <div class="tile"><div class="label">Awaiting settlement</div><div class="value" id="t-inflight">—</div><div class="note">captured, not yet settled</div></div>
+  <div class="tile"><div class="label">Settled</div><div class="value" id="t-settled">—</div><div class="note">reached the payee</div></div>
+  <div class="tile"><div class="label">Events pending</div><div class="value" id="t-outbox">—</div><div class="note">written, not yet published</div></div>
+  <div class="tile"><div class="label">Net balance</div><div class="value" id="t-net">—</div><div class="note" id="t-net-note">sum of every account</div></div>
+</div>
+
+<div class="card">
+  <figure>
+    <figcaption>Money in flight, last 2 minutes · sampled once a second</figcaption>
+    <div class="chart">
+      <svg id="chart" viewBox="0 0 720 190" preserveAspectRatio="none" role="img"
+           aria-label="Clearing account balance over time"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+  </figure>
+</div>
+
+<div class="card">
+  <h2>Retries are free</h2>
+  <p class="hint">
+    Sends one payment twice with the same <code class="inline">Idempotency-Key</code>.
+    The second request must return the identical body and charge nothing.
+  </p>
+  <div class="row">
+    <button class="primary" id="run-idem">Send the same payment twice</button>
+    <button id="run-burst">Send 25 payments</button>
+    <span class="muted" id="demo-status"></span>
+  </div>
+  <div id="idem-out"></div>
+</div>
+
+<div class="card" id="journal-card" hidden>
+  <h2>The journal behind that payment</h2>
+  <p class="hint">Every entry's legs must sum to exactly zero. Debits left, credits right.</p>
+  <div id="journal-out"></div>
+</div>
+
+<div class="card" id="faults-card" hidden>
+  <h2>Break it on purpose</h2>
+  <p class="hint">
+    Arms the engine's failure-injection points at runtime. Send traffic with a
+    point armed and watch requests fail — then disarm, and watch money in flight
+    drain to zero with the books still balanced.
+  </p>
+  <div class="faults" id="faults-list"></div>
+  <div class="row" style="margin-top:12px">
+    <button id="faults-off">Disarm everything</button>
+    <span class="muted" id="faults-total"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Accounts</h2>
+  <p class="hint">The ledger in full. The net of every balance is always zero.</p>
+  <table>
+    <thead><tr><th>Account</th><th>Kind</th><th class="num">Balance</th></tr></thead>
+    <tbody id="accounts"></tbody>
+  </table>
+</div>
+
+<div class="card" id="violations-card" hidden>
+  <h2 style="color:var(--critical)">Invariant violations</h2>
+  <p class="hint">The ledger no longer balances. Each line names the broken rule.</p>
+  <ul class="violations" id="violations"></ul>
+</div>
+
+<div class="card">
+  <details class="api">
+    <summary>Latest snapshot (<code class="inline">GET /v1/ledger/snapshot</code>)</summary>
+    <pre id="raw"></pre>
+  </details>
+</div>
+
+</div>
+<script>
+"use strict";
+
+const MAX_SAMPLES = 120;          // 2 minutes at one sample a second
+const samples = [];               // {t: Date, v: Number}
+let currency = "USD";
+let demoWallets = null;           // {payer, payee} reused across demo runs
+let lastPaymentId = null;
+let faultsEnabled = false;
+const accountNames = new Map();   // id -> name, for the journal view
+
+/* ---------- formatting ---------- */
+
+// Amounts are integers in minor units everywhere in the engine; only the
+// presentation layer divides by 100.
+function major(minor) { return (minor / 100); }
+
+function fmtMoney(minor) {
+  return major(minor).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+function fmtCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return n.toLocaleString();
+}
+
+function el(id) { return document.getElementById(id); }
+
+/* ---------- polling ---------- */
+
+async function api(method, path, body, headers) {
+  const res = await fetch(path, {
+    method,
+    headers: Object.assign({ "Content-Type": "application/json" }, headers || {}),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch (_) { /* non-JSON */ }
+  return { status: res.status, headers: res.headers, body: parsed, raw: text, ok: res.ok };
+}
+
+let failures = 0;
+
+async function poll() {
+  try {
+    const res = await api("GET", "/v1/ledger/snapshot");
+    if (!res.ok) throw new Error("snapshot " + res.status);
+    failures = 0;
+    render(res.body);
+  } catch (err) {
+    failures++;
+    const dot = el("live-dot");
+    dot.className = "dot " + (failures > 3 ? "down" : "stale");
+    dot.title = String(err);
+  }
+}
+
+function render(s) {
+  el("live-dot").className = "dot";
+  el("live-dot").title = "connected";
+
+  if (s.accounts.length) currency = s.accounts[0].currency;
+  el("hero-cur").textContent = currency;
+  el("hero-clearing").textContent = fmtMoney(s.clearing_balance);
+
+  el("t-inflight").textContent = fmtCount(s.in_flight);
+  el("t-settled").textContent = fmtCount(s.settled);
+  el("t-outbox").textContent = fmtCount(s.pending_outbox);
+
+  const net = el("t-net");
+  net.textContent = fmtMoney(s.net_balance);
+  net.className = "value " + (s.net_balance === 0 ? "good" : "critical");
+  el("t-net-note").textContent = s.net_balance === 0
+    ? "balanced — value is only moved" : "NOT ZERO — value was created or destroyed";
+
+  // Status colour is always paired with a glyph and a word.
+  const badge = el("invariant-badge");
+  const ok = s.invariants.ok;
+  badge.className = "badge " + (ok ? "good" : "critical");
+  badge.innerHTML = "";
+  const glyph = document.createElement("span");
+  glyph.className = "glyph";
+  glyph.textContent = ok ? "✓" : "✕";
+  const label = document.createElement("span");
+  label.textContent = ok
+    ? "Invariants hold · " + fmtCount(s.invariants.postings) + " postings sum to 0"
+    : "Invariants violated";
+  badge.append(glyph, label);
+
+  renderAccounts(s.accounts);
+  renderViolations(s.invariants.violations);
+
+  if (s.faults_enabled && !faultsEnabled) { faultsEnabled = true; loadFaults(); }
+
+  samples.push({ t: new Date(s.observed_at), v: s.clearing_balance });
+  while (samples.length > MAX_SAMPLES) samples.shift();
+  drawChart();
+
+  el("raw").textContent = JSON.stringify(s, null, 2);
+}
+
+function renderAccounts(accounts) {
+  const body = el("accounts");
+  body.innerHTML = "";
+  let total = 0;
+  for (const a of accounts) {
+    accountNames.set(a.id, a.name);
+    total += a.balance;
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = a.name;
+    const kind = document.createElement("td");
+    const tag = document.createElement("span");
+    tag.className = "kind";
+    tag.textContent = a.kind;
+    kind.append(tag);
+    const bal = document.createElement("td");
+    bal.className = "num";
+    bal.textContent = fmtMoney(a.balance);
+    tr.append(name, kind, bal);
+    body.append(tr);
+  }
+  const tr = document.createElement("tr");
+  tr.className = "total";
+  const label = document.createElement("td");
+  label.colSpan = 2;
+  label.textContent = "Net";
+  const value = document.createElement("td");
+  value.className = "num";
+  value.textContent = fmtMoney(total);
+  tr.append(label, value);
+  body.append(tr);
+}
+
+function renderViolations(list) {
+  const card = el("violations-card");
+  if (!list || !list.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const ul = el("violations");
+  ul.innerHTML = "";
+  for (const v of list) {
+    const li = document.createElement("li");
+    li.textContent = v.rule + ": " + v.detail;
+    ul.append(li);
+  }
+}
+
+/* ---------- chart ---------- */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const W = 720, H = 190, PAD_L = 56, PAD_R = 8, PAD_T = 12, PAD_B = 22;
+
+function node(name, attrs) {
+  const n = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  return n;
+}
+
+function niceCeil(v) {
+  if (v <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * mag) return m * mag;
+  return 10 * mag;
+}
+
+function drawChart() {
+  const svg = el("chart");
+  svg.innerHTML = "";
+  if (samples.length < 2) return;
+
+  const peak = Math.max(...samples.map(s => s.v), 0);
+  const top = niceCeil(major(peak) || 1);
+  const x = i => PAD_L + (i / (samples.length - 1)) * (W - PAD_L - PAD_R);
+  const y = v => PAD_T + (1 - major(v) / top) * (H - PAD_T - PAD_B);
+
+  // Recessive gridlines and axis labels, four steps. The number of decimals
+  // follows the step size: with a small range, whole numbers would render as
+  // a column of duplicates.
+  const step = top / 4;
+  const decimals = step >= 1 ? 0 : step >= 0.5 ? 1 : 2;
+  for (let i = 0; i <= 4; i++) {
+    const value = step * i;
+    const gy = y(value * 100);
+    svg.append(node("line", {
+      x1: PAD_L, x2: W - PAD_R, y1: gy, y2: gy,
+      stroke: i === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1,
+    }));
+    const label = node("text", {
+      x: PAD_L - 9, y: gy + 3.5, "text-anchor": "end",
+      fill: "var(--muted)", "font-size": 10.5,
+      "font-family": "var(--sans)", "font-variant-numeric": "tabular-nums",
+    });
+    label.textContent = value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals, maximumFractionDigits: decimals,
+    });
+    svg.append(label);
+  }
+
+  const pts = samples.map((s, i) => [x(i), y(s.v)]);
+  const line = pts.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const base = y(0);
+
+  svg.append(node("polygon", {
+    points: pts[0][0] + "," + base + " " + line + " " + pts[pts.length - 1][0] + "," + base,
+    fill: "var(--series-soft)",
+  }));
+  svg.append(node("polyline", {
+    points: line, fill: "none", stroke: "var(--series)",
+    "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+  }));
+
+  // Latest value, directly labelled: a single series needs no legend box.
+  const last = pts[pts.length - 1];
+  svg.append(node("circle", {
+    cx: last[0], cy: last[1], r: 3.5,
+    fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2,
+  }));
+
+  const time = node("text", {
+    x: W - PAD_R, y: H - 5, "text-anchor": "end",
+    fill: "var(--muted)", "font-size": 10.5, "font-family": "var(--sans)",
+  });
+  time.textContent = "now";
+  svg.append(time);
+
+  const first = node("text", {
+    x: PAD_L, y: H - 5, "text-anchor": "start",
+    fill: "var(--muted)", "font-size": 10.5, "font-family": "var(--sans)",
+  });
+  first.textContent = "-" + Math.round((samples[samples.length - 1].t - samples[0].t) / 1000) + "s";
+  svg.append(first);
+
+  // Hover layer: crosshair plus tooltip, with a hit area wider than the mark.
+  const cross = node("line", {
+    y1: PAD_T, y2: H - PAD_B, stroke: "var(--axis)",
+    "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0,
+  });
+  const marker = node("circle", {
+    r: 4, fill: "var(--series)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0,
+  });
+  svg.append(cross, marker);
+
+  const hit = node("rect", {
+    x: PAD_L, y: PAD_T, width: W - PAD_L - PAD_R, height: H - PAD_T - PAD_B,
+    fill: "transparent", style: "cursor:crosshair",
+  });
+  svg.append(hit);
+
+  const tip = el("tip");
+  hit.addEventListener("mousemove", ev => {
+    const box = svg.getBoundingClientRect();
+    const ratio = (ev.clientX - box.left) / box.width;      // viewBox is scaled
+    const vx = ratio * W;
+    let i = Math.round(((vx - PAD_L) / (W - PAD_L - PAD_R)) * (samples.length - 1));
+    i = Math.max(0, Math.min(samples.length - 1, i));
+    const s = samples[i];
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i));
+    cross.setAttribute("opacity", 1);
+    marker.setAttribute("cx", x(i)); marker.setAttribute("cy", y(s.v));
+    marker.setAttribute("opacity", 1);
+    tip.style.opacity = 1;
+    tip.style.left = (x(i) / W) * box.width + "px";
+    tip.style.top = (y(s.v) / H) * box.height - 10 + "px";
+    tip.innerHTML = "";
+    const v = document.createElement("div");
+    v.className = "t-val";
+    v.textContent = fmtMoney(s.v) + " " + currency;
+    const t = document.createElement("div");
+    t.className = "t-time";
+    t.textContent = s.t.toLocaleTimeString();
+    tip.append(v, t);
+  });
+  hit.addEventListener("mouseleave", () => {
+    cross.setAttribute("opacity", 0);
+    marker.setAttribute("opacity", 0);
+    tip.style.opacity = 0;
+  });
+}
+
+/* ---------- demos ---------- */
+
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+async function ensureWallets() {
+  if (demoWallets) return demoWallets;
+  const tag = uuid().slice(0, 8);
+  const mk = async role => {
+    const name = "demo-" + role + "-" + tag;
+    const res = await api("POST", "/v1/accounts", { name, currency: currency, kind: "wallet" });
+    if (!res.ok) throw new Error("creating " + role + ": " + (res.body?.error?.message || res.status));
+    // Record the name now: the journal is drawn before the next poll would
+    // have picked these accounts up.
+    accountNames.set(res.body.id, name);
+    return res.body.id;
+  };
+  const payer = await mk("payer"), payee = await mk("payee");
+  const fund = await api("POST", "/v1/accounts/" + payer + "/deposits",
+    { amount: 100000000, currency: currency, reference: "dashboard float" },
+    { "Idempotency-Key": "dashboard-fund-" + payer });
+  if (!fund.ok) throw new Error("funding: " + (fund.body?.error?.message || fund.status));
+  demoWallets = { payer, payee };
+  return demoWallets;
+}
+
+async function balanceOf(id) {
+  const res = await api("GET", "/v1/accounts/" + id);
+  return res.ok ? res.body.balance : null;
+}
+
+function stepRow(n, what, detail, state) {
+  const d = document.createElement("div");
+  d.className = "step" + (state ? " " + state : "");
+  const num = document.createElement("div");
+  num.className = "n";
+  num.textContent = n;
+  const body = document.createElement("div");
+  const w = document.createElement("div");
+  w.className = "what";
+  w.textContent = what;
+  const det = document.createElement("div");
+  det.className = "detail";
+  det.innerHTML = detail;
+  body.append(w, det);
+  d.append(num, body);
+  return d;
+}
+
+el("run-idem").addEventListener("click", async () => {
+  const btn = el("run-idem");
+  const out = el("idem-out");
+  btn.disabled = true;
+  el("demo-status").textContent = "running…";
+  out.innerHTML = "";
+
+  try {
+    const w = await ensureWallets();
+    const before = await balanceOf(w.payer);
+    const key = uuid();
+    const payment = {
+      payer_account: w.payer, payee_account: w.payee,
+      amount: 25000, fee: 250, currency: currency, reference: "dashboard demo",
+    };
+
+    const first = await api("POST", "/v1/payments", payment, { "Idempotency-Key": key });
+    const second = await api("POST", "/v1/payments", payment, { "Idempotency-Key": key });
+    const after = await balanceOf(w.payer);
+
+    if (!first.ok) throw new Error(first.body?.error?.message || ("HTTP " + first.status));
+
+    const steps = document.createElement("div");
+    steps.className = "steps";
+    const charged = before - after;
+    const identical = first.raw === second.raw;
+    const replayed = second.headers.get("Idempotent-Replay") === "true";
+
+    steps.append(stepRow(1, "First request → HTTP " + first.status,
+      "Payment <code>" + first.body.id.slice(0, 8) + "…</code> captured for 250.00 plus a 2.50 fee.", "ok"));
+    steps.append(stepRow(2, "Second request, same key → HTTP " + second.status,
+      replayed
+        ? "Returned <code>Idempotent-Replay: true</code>. No work was done."
+        : "<strong>No replay header.</strong> This should not happen.",
+      replayed ? "ok" : "bad"));
+    steps.append(stepRow(3, identical ? "Responses are byte-identical" : "Responses differ",
+      identical
+        ? "The stored response was replayed verbatim, so the retry is indistinguishable from the original call."
+        : "The second response did not match the first.",
+      identical ? "ok" : "bad"));
+    steps.append(stepRow(4, "Payer charged " + fmtMoney(charged) + " " + currency,
+      charged === 25250
+        ? "Exactly one charge of 252.50 for two identical requests."
+        : "<strong>Expected a single charge of 252.50.</strong>",
+      charged === 25250 ? "ok" : "bad"));
+    out.append(steps);
+
+    const pass = replayed && identical && charged === 25250;
+    const verdict = document.createElement("div");
+    verdict.className = "verdict" + (pass ? "" : " bad");
+    verdict.textContent = pass
+      ? "✓ Two identical requests, one payment. The retry cost a database lookup and nothing else."
+      : "✕ The idempotency guarantee did not hold for this request.";
+    out.append(verdict);
+
+    lastPaymentId = first.body.id;
+    await showJournal(lastPaymentId);
+    watchForSettlement(lastPaymentId);
+    el("demo-status").textContent = "";
+  } catch (err) {
+    const p = document.createElement("p");
+    p.className = "err";
+    p.textContent = String(err);
+    out.append(p);
+    el("demo-status").textContent = "";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+el("run-burst").addEventListener("click", async () => {
+  const btn = el("run-burst");
+  btn.disabled = true;
+  el("demo-status").textContent = "sending…";
+  try {
+    const w = await ensureWallets();
+    const sends = [];
+    for (let i = 0; i < 25; i++) {
+      sends.push(api("POST", "/v1/payments", {
+        payer_account: w.payer, payee_account: w.payee,
+        amount: 1000 + i, fee: 10, currency: currency, reference: "dashboard burst",
+      }, { "Idempotency-Key": uuid() }));
+    }
+    const results = await Promise.all(sends);
+    const ok = results.filter(r => r.ok).length;
+    el("demo-status").textContent = ok + " of 25 captured — watch money in flight drain";
+  } catch (err) {
+    el("demo-status").textContent = String(err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// watchForSettlement re-renders the journal until the settlement entry
+// appears. Settlement happens behind the broker, so it is never there yet
+// when the capture responds — showing only the capture would misrepresent
+// the design as single-phase.
+function watchForSettlement(paymentId) {
+  let tries = 0;
+  const timer = setInterval(async () => {
+    if (++tries > 25 || paymentId !== lastPaymentId) { clearInterval(timer); return; }
+    const entries = await showJournal(paymentId);
+    if (entries >= 2) clearInterval(timer);
+  }, 800);
+}
+
+async function showJournal(paymentId) {
+  const res = await api("GET", "/v1/payments/" + paymentId + "/entries");
+  if (!res.ok) return 0;
+  const card = el("journal-card");
+  const out = el("journal-out");
+  out.innerHTML = "";
+  card.hidden = false;
+
+  for (const entry of res.body.entries) {
+    const box = document.createElement("div");
+    box.className = "entry";
+
+    const head = document.createElement("div");
+    head.className = "head";
+    const kind = document.createElement("span");
+    kind.className = "k";
+    kind.textContent = entry.kind;
+    const when = document.createElement("span");
+    when.textContent = new Date(entry.created_at).toLocaleTimeString();
+    head.append(kind, when);
+
+    const t = document.createElement("div");
+    t.className = "tacct";
+    const debits = document.createElement("div");
+    const credits = document.createElement("div");
+    for (const [side, title] of [[debits, "Debits (in)"], [credits, "Credits (out)"]]) {
+      const h = document.createElement("div");
+      h.className = "ttl";
+      h.textContent = title;
+      side.append(h);
+    }
+    for (const p of entry.postings) {
+      const row = document.createElement("div");
+      row.className = "leg";
+      const who = document.createElement("span");
+      who.textContent = accountNames.get(p.account_id) || (p.account_id.slice(0, 8) + "…");
+      const amt = document.createElement("span");
+      amt.className = "amt";
+      amt.textContent = fmtMoney(Math.abs(p.amount));
+      row.append(who, amt);
+      (p.amount > 0 ? debits : credits).append(row);
+    }
+    t.append(debits, credits);
+
+    const sum = document.createElement("div");
+    sum.className = "sumline";
+    const lbl = document.createElement("span");
+    lbl.textContent = "Sum of all legs";
+    const val = document.createElement("span");
+    val.innerHTML = entry.sum === 0
+      ? '<span style="color:var(--good);font-weight:600">✓ 0 — balanced</span>'
+      : '<span style="color:var(--critical);font-weight:600">✕ ' + entry.sum + '</span>';
+    sum.append(lbl, val);
+
+    box.append(head, t, sum);
+    out.append(box);
+  }
+
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.style.marginTop = "11px";
+  note.style.marginBottom = "0";
+  note.textContent = res.body.entries.length >= 2
+    ? "Capture moved the funds into clearing; settlement moved them on to the payee once the event came back through the broker."
+    : "Waiting for the settlement entry — the capture event has to travel through the broker and come back.";
+  out.append(note);
+
+  return res.body.entries.length;
+}
+
+/* ---------- fault injection ---------- */
+
+async function loadFaults() {
+  const res = await api("GET", "/v1/faults");
+  if (!res.ok) return;
+  el("faults-card").hidden = false;
+  const list = el("faults-list");
+  list.innerHTML = "";
+  el("faults-total").textContent = res.body.total + " faults fired so far";
+
+  for (const f of res.body.points) {
+    const row = document.createElement("div");
+    row.className = "fault";
+
+    const top = document.createElement("div");
+    top.className = "top";
+    const pt = document.createElement("span");
+    pt.className = "pt";
+    pt.textContent = f.point;
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = 0; range.max = 100; range.step = 5; range.value = 0;
+    range.setAttribute("aria-label", "Failure probability for " + f.point);
+    const pct = document.createElement("span");
+    pct.className = "pct";
+    pct.textContent = "0%";
+    const fired = document.createElement("span");
+    fired.className = "fired";
+    fired.textContent = f.fired + " fired";
+
+    range.addEventListener("input", () => { pct.textContent = range.value + "%"; });
+    range.addEventListener("change", async () => {
+      await api("POST", "/v1/faults", { point: f.point, probability: Number(range.value) / 100 });
+      loadFaults();
+    });
+
+    top.append(pt, range, pct, fired);
+    const desc = document.createElement("div");
+    desc.className = "desc";
+    desc.textContent = f.description;
+    row.append(top, desc);
+    list.append(row);
+  }
+}
+
+el("faults-off").addEventListener("click", async () => {
+  await api("POST", "/v1/faults", { disable: true });
+  loadFaults();
+});
+
+/* ---------- theme ---------- */
+
+el("theme-toggle").addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  drawChart();
+});
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

@@ -52,6 +52,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"ProcessedMarkerRollsBackWithItsTransaction", testProcessedMarkerRollback},
 		{"InvariantsHoldAfterTransfers", testInvariantsClean},
 		{"InvariantsCatchUnjournalledBalanceChange", testInvariantsCorrupt},
+		{"PaymentCountsByStatus", testPaymentCounts},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, newHarness(t)) })
@@ -816,5 +817,53 @@ func testInvariantsCorrupt(t *testing.T, h Harness) {
 	}
 	if !overdraft {
 		t.Errorf("violations = %v, want one for %s", rep.Violations, ledger.RuleNoUnauthorisedOverdraft)
+	}
+}
+
+func testPaymentCounts(t *testing.T, h Harness) {
+	ctx := context.Background()
+	f := setup(t, h.Store)
+
+	counts, err := h.Store.CountPaymentsByStatus(ctx)
+	if err != nil {
+		t.Fatalf("CountPaymentsByStatus: %v", err)
+	}
+	if len(counts) != 0 {
+		t.Errorf("counts on an empty ledger = %v, want empty", counts)
+	}
+
+	ids := make([]uuid.UUID, 3)
+	for i := range ids {
+		ids[i] = uuid.New()
+		id := ids[i]
+		if err := h.Store.Tx(ctx, func(ctx context.Context, tx storage.Tx) error {
+			now := time.Now().UTC()
+			return tx.InsertPayment(ctx, storage.Payment{
+				ID: id, IdempotencyKey: id.String(), PayerAccount: f.alice.ID,
+				PayeeAccount: f.bob.ID, Amount: 100, Currency: "USD",
+				Status: storage.StatusCaptured, CreatedAt: now, UpdatedAt: now,
+			})
+		}); err != nil {
+			t.Fatalf("InsertPayment: %v", err)
+		}
+	}
+	if err := h.Store.Tx(ctx, func(ctx context.Context, tx storage.Tx) error {
+		return tx.TransitionPayment(ctx, ids[0], storage.StatusCaptured, storage.StatusSettled)
+	}); err != nil {
+		t.Fatalf("TransitionPayment: %v", err)
+	}
+
+	counts, err = h.Store.CountPaymentsByStatus(ctx)
+	if err != nil {
+		t.Fatalf("CountPaymentsByStatus: %v", err)
+	}
+	if got := counts[storage.StatusCaptured]; got != 2 {
+		t.Errorf("captured = %d, want 2", got)
+	}
+	if got := counts[storage.StatusSettled]; got != 1 {
+		t.Errorf("settled = %d, want 1", got)
+	}
+	if _, present := counts[storage.StatusFailed]; present {
+		t.Errorf("a status with no payments was reported: %v", counts)
 	}
 }

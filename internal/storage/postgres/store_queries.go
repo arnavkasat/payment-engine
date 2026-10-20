@@ -176,6 +176,28 @@ func (s *Store) GetEntries(ctx context.Context, paymentID uuid.UUID) ([]ledger.E
 	return entries, mapError(postings.Err())
 }
 
+// CountPaymentsByStatus tallies payments by status. The index on
+// (status, created_at) turns this into an index-only scan.
+func (s *Store) CountPaymentsByStatus(ctx context.Context) (map[storage.PaymentStatus]int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM payments GROUP BY status`)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+	counts := map[storage.PaymentStatus]int{}
+	for rows.Next() {
+		var (
+			status string
+			n      int
+		)
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, mapError(err)
+		}
+		counts[storage.PaymentStatus(status)] = n
+	}
+	return counts, mapError(rows.Err())
+}
+
 const outboxColumns = `id, aggregate_id, type, payload, attempts, created_at, published_at, leased_until, lease_owner, last_error`
 
 func scanOutbox(row interface{ Scan(...any) error }) (storage.OutboxMessage, error) {

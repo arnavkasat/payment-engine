@@ -15,6 +15,37 @@ The guarantee, stated so it can be falsified:
 
 ---
 
+## See it happen
+
+The engine serves an operator dashboard at `/` whose only job is to make those
+guarantees visible. Below, the publisher has been deliberately broken, so captured
+funds pile up in the clearing account — visible, accounted for, going nowhere — and
+then drain to zero the moment it is repaired. The books balance the entire time.
+
+![The dashboard, showing money piling up in clearing while the publisher is broken and draining to zero once it recovers](docs/dashboard.png)
+
+It is one `go:embed`-ed HTML file with no build step and no JavaScript
+dependencies, so the engine stays a single static binary. It can:
+
+- **send the same payment twice** and show you the byte-identical replay, the
+  `Idempotent-Replay` header, and that the payer was charged exactly once;
+- **draw the journal** behind a payment as debits and credits that sum to zero,
+  capture and settlement side by side;
+- **break the engine on purpose** — arm any of the six failure-injection points
+  at runtime, send traffic, then disarm and watch it recover;
+- **recompute every invariant** from the journal once a second and go red the
+  moment anything drifts.
+
+```sh
+make demo          # http://localhost:8080 — no database, no broker, no build step
+```
+
+The fault controls only appear when the process is started with
+`ENABLE_FAULT_INJECTION=true`. An endpoint that makes a payment API fail on
+demand has no business being reachable in production, so it is off by default.
+
+---
+
 ## Quickstart
 
 No dependencies — the whole engine in one process, backed by an in-memory store:
@@ -27,7 +58,7 @@ The real topology — PostgreSQL, Kafka, the API and the settlement worker:
 
 ```sh
 make up            # docker compose up --build -d
-curl localhost:8080/readyz
+open http://localhost:8080
 ```
 
 Then move some money:
@@ -246,6 +277,9 @@ More detail, including the decisions that went the other way: [docs/ARCHITECTURE
 | `GET` | `/v1/accounts/{id}` | |
 | `POST` | `/v1/accounts/{id}/deposits` | requires `Idempotency-Key`; the only way value enters the ledger |
 | `GET` | `/v1/ledger/invariants` | `200` when the books balance, `500` when they do not |
+| `GET` | `/v1/ledger/snapshot` | accounts, balances, in-flight counts and invariant status in one call |
+| `GET` | `/` | the operator dashboard |
+| `GET` `POST` | `/v1/faults` | arm and disarm injection points; `404` unless `ENABLE_FAULT_INJECTION=true` |
 | `GET` | `/healthz`, `/readyz`, `/metrics` | Prometheus text exposition |
 
 Errors are always `{"error":{"code":"...","message":"..."}}`. Codes are stable:
@@ -326,11 +360,15 @@ Everything is read in [`internal/config`](internal/config/config.go) and nowhere
 | `KAFKA_BROKERS` | `localhost:9092` | comma separated |
 | `KAFKA_TOPIC` | `payments.events` | |
 | `CONSUMER_GROUP` | `settlement` | changing it replays history |
+| `KAFKA_PARTITIONS` | `6` | partition count used when creating the topic; the ceiling on settlement concurrency |
+| `KAFKA_REPLICATION_FACTOR` | `1` | must not exceed the broker count |
+| `KAFKA_CREATE_TOPIC` | `true` | the worker creates the topic at startup |
 | `CLEARING_ACCOUNT` / `FEE_ACCOUNT` | `clearing` / `fees` | resolved by name at startup |
 | `OUTBOX_BATCH` | `128` | |
 | `OUTBOX_INTERVAL` | `50ms` | poll delay after an empty pass |
 | `OUTBOX_LEASE` | `30s` | must exceed a publish; validated at startup |
 | `BOOTSTRAP_ACCOUNTS` | `true` | create the standard accounts if missing |
+| `ENABLE_FAULT_INJECTION` | `false` | exposes `/v1/faults`; **never enable in production** |
 | `LOG_LEVEL` | `info` | |
 | `SHUTDOWN_TIMEOUT` | `15s` | |
 | `ENABLE_PUBLISHER` / `ENABLE_CONSUMER` | `true` | worker only; run the two halves separately to scale them separately |
@@ -341,7 +379,7 @@ Everything is read in [`internal/config`](internal/config/config.go) and nowhere
 
 ```
 cmd/
-  api/        HTTP API; also runs the pipeline in-process in demo mode
+  api/        HTTP API and dashboard; also runs the pipeline in-process in demo mode
   worker/     outbox publisher and settlement consumer
   chaos/      failure-injection harness
   loadgen/    load generator with exact percentiles
@@ -360,7 +398,7 @@ internal/
     inmem/      in-process bus that reproduces at-least-once delivery
   chaos/      the failure-injection harness, as a library so CI runs it
   faults/     named injection points
-  httpapi/    handlers, error mapping, middleware
+  httpapi/    handlers, error mapping, middleware, the embedded dashboard
   metrics/    counters and histograms in Prometheus text format
   config/     environment configuration
   app/        wiring shared by both binaries

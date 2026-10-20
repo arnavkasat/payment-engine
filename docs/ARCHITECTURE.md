@@ -139,6 +139,62 @@ bypassed the marker cannot settle a settled payment. And beneath that, a partial
 allows only one capture and one settlement row per payment. Three independent layers, because
 the cost of each is a few lines and the cost of a double settlement is real money.
 
+## Offset commits are batched, on purpose
+
+kafka-go can commit an offset synchronously after every message. The engine does
+not, and the reason is the deduplication table.
+
+A synchronous commit costs a broker round trip per message, which caps settlement
+throughput at the inverse of that latency — a few hundred messages a second on a
+healthy local broker, far less across a network. It buys durability of the
+*offset*, not of the effect: the effect was already durable when its transaction
+committed.
+
+What a batched commit risks is replaying the last interval's worth of offsets
+after a crash. Those messages arrive again, find their marker already written,
+and are skipped. The trade is a bounded amount of redundant work after a crash —
+precisely the work the engine is built to absorb — for an order of magnitude of
+throughput. `CommitInterval` is configurable, and a negative value restores
+synchronous commits for anyone who wants to pay for them.
+
+The ordering that matters is untouched either way: `CommitMessages` is still
+called only after the handler's transaction has committed, so an offset can
+never advance past a message that was not applied.
+
+## The topic is created explicitly
+
+The worker creates its topic at startup rather than relying on the broker's
+auto-creation, for three reasons. Auto-creation hands out whatever partition
+count the broker defaults to, and the partition count is the ceiling on
+settlement concurrency — a consumer group can never have more useful members
+than partitions. It is disabled on most production clusters. And a client only
+triggers it by asking for it in a metadata request, so a publisher that does not
+ask simply fails against a missing topic, however the broker is configured.
+
+That last point is not hypothetical: it is how the first CI run of this
+repository failed. The broker had auto-creation enabled, the writer never asked
+for it, every publish failed with `UNKNOWN_TOPIC_OR_PARTITION`, and the outbox
+never drained. The engine behaved correctly throughout — nothing was lost, the
+books stayed balanced, and the undelivered events sat in the outbox exactly as
+designed — but nothing settled either.
+
+## The dashboard is one embedded file
+
+`internal/httpapi/dashboard.html` is served at `/` via `go:embed`. There is no
+npm, no bundler and no build step, which keeps the repository a Go repository
+and the deployable a single static binary.
+
+It polls one endpoint, `GET /v1/ledger/snapshot`, which gathers the accounts,
+the payment counts, the outbox depth and a full invariant verification in one
+server-side call. Four separate polls would be four round trips showing four
+slightly different moments; one call means the numbers on screen are consistent
+with each other.
+
+The fault controls it exposes are gated behind `ENABLE_FAULT_INJECTION`, which
+defaults to false. The injector is shared by the service, the publisher and the
+consumer, so arming a point affects the whole pipeline at once; when the flag is
+off the injector is nil, and a nil injector costs one nil check and never fires.
+
 ## Defence in depth in the schema
 
 The database enforces what it can, so that the invariants survive code that is not this code:

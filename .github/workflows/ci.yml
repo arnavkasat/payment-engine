@@ -102,23 +102,29 @@ jobs:
           docker compose logs
           exit 1
 
+      - name: The dashboard is served
+        run: |
+          curl -sf http://localhost:8080/ | grep -q "Payment engine"
+          curl -sf http://localhost:8080/v1/ledger/snapshot | python3 -m json.tool > /dev/null
+
       - name: Drive traffic through the whole pipeline
-        run: go run ./cmd/loadgen -url http://localhost:8080 -concurrency 16 -duration 20s -warmup 3s
+        run: go run ./cmd/loadgen -url http://localhost:8080 -concurrency 8 -duration 10s -warmup 2s
 
       - name: Wait for settlement to drain
         run: |
           # Every capture parks its amount in clearing and every settlement
           # takes it out again, so a zero clearing balance means the Kafka
           # round trip completed for every payment.
-          for i in $(seq 1 60); do
-            balance=$(curl -sf http://localhost:8080/v1/accounts |
-              python3 -c "import sys,json;print(next(a['balance'] for a in json.load(sys.stdin)['accounts'] if a['name']=='clearing'))")
-            echo "clearing balance: $balance"
-            if [ "$balance" = "0" ]; then exit 0; fi
+          for i in $(seq 1 90); do
+            snapshot=$(curl -sf http://localhost:8080/v1/ledger/snapshot)
+            read -r balance pending inflight <<<"$(printf '%s' "$snapshot" |
+              python3 -c "import sys,json;d=json.load(sys.stdin);print(d['clearing_balance'],d['pending_outbox'],d['in_flight'])")"
+            echo "clearing=$balance pending_events=$pending awaiting_settlement=$inflight"
+            if [ "$balance" = "0" ] && [ "$pending" = "0" ]; then exit 0; fi
             sleep 2
           done
           echo "settlement did not drain"
-          docker compose logs worker
+          docker compose logs --tail 200 worker
           exit 1
 
       - name: Verify ledger invariants

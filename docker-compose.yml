@@ -46,9 +46,10 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      # Auto-creation keeps the quickstart to one command. A real
-      # deployment creates the topic explicitly with a chosen partition
-      # count, because partitions are what bound settlement concurrency.
+      # The worker creates the topic itself at startup with an explicit
+      # partition count (KAFKA_PARTITIONS), because partitions are what
+      # bound settlement concurrency. Auto-creation stays on only as a
+      # fallback for clients that reach the broker first.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 6
       CLUSTER_ID: payment-engine-local-cluster
@@ -71,6 +72,9 @@ services:
       KAFKA_BROKERS: "kafka:19092"
       KAFKA_TOPIC: "payments.events"
       LOG_LEVEL: "info"
+      # The dashboard's fault controls. Safe here because this compose file
+      # is a local demo; never set it on anything reachable.
+      ENABLE_FAULT_INJECTION: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +88,7 @@ services:
       KAFKA_BROKERS: "kafka:19092"
       KAFKA_TOPIC: "payments.events"
       CONSUMER_GROUP: "settlement"
+      KAFKA_PARTITIONS: "6"
       OUTBOX_BATCH: "256"
       OUTBOX_INTERVAL: "20ms"
       LOG_LEVEL: "info"

@@ -30,6 +30,19 @@ type ConsumerConfig struct {
 	MaxAttempts int
 	// RetryBackoff is the base delay between in-process retries.
 	RetryBackoff time.Duration
+	// CommitInterval is how often offsets are flushed to the broker.
+	//
+	// Committing synchronously after every message costs a broker round
+	// trip per message and caps settlement throughput at the inverse of
+	// that latency. It is also unnecessary here: the consumer deduplicates
+	// on a stable message id, in the same transaction as its effect, so a
+	// crash that replays the last interval's worth of offsets replays
+	// messages that are recognised and skipped. The interval therefore
+	// trades a bounded amount of redundant work after a crash — which the
+	// engine is built to absorb — for an order of magnitude of throughput.
+	//
+	// Zero selects the default; set it negative to commit synchronously.
+	CommitInterval time.Duration
 	// Logger receives retry and failure detail. Nil discards them.
 	Logger *slog.Logger
 }
@@ -55,6 +68,12 @@ func (c *ConsumerConfig) applyDefaults() error {
 	}
 	if c.RetryBackoff <= 0 {
 		c.RetryBackoff = 20 * time.Millisecond
+	}
+	if c.CommitInterval == 0 {
+		c.CommitInterval = 100 * time.Millisecond
+	}
+	if c.CommitInterval < 0 {
+		c.CommitInterval = 0 // synchronous, one round trip per message
 	}
 	if c.Logger == nil {
 		c.Logger = slog.New(slog.DiscardHandler)
@@ -83,10 +102,11 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 			GroupID:  cfg.Group,
 			MinBytes: cfg.MinBytes,
 			MaxBytes: cfg.MaxBytes,
-			// Offsets are committed explicitly, after the handler's
-			// transaction has committed. Committing on a timer instead
-			// would let an offset move past a message that never applied.
-			CommitInterval: 0,
+			// CommitMessages is still called explicitly, only ever after
+			// the handler's transaction has committed, so an offset can
+			// never move past a message that was not applied. The interval
+			// only batches the flush of offsets already earned.
+			CommitInterval: cfg.CommitInterval,
 		}),
 	}, nil
 }

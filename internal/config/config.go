@@ -31,6 +31,14 @@ type Config struct {
 	// ConsumerGroup names the settlement consumer group. Deduplication
 	// markers are scoped to it, so changing it replays history.
 	ConsumerGroup string
+	// KafkaPartitions is the partition count used when the worker creates
+	// the topic. It is the ceiling on settlement concurrency.
+	KafkaPartitions int
+	// KafkaReplicationFactor is the replication factor used when creating
+	// the topic. It must not exceed the broker count.
+	KafkaReplicationFactor int
+	// CreateTopic makes the worker create the topic at startup.
+	CreateTopic bool
 
 	// ClearingAccount and FeeAccount are looked up by name at startup.
 	ClearingAccount string
@@ -45,6 +53,12 @@ type Config struct {
 	// missing. Convenient for demos; harmless when the accounts exist.
 	Bootstrap bool
 
+	// EnableFaultInjection exposes /v1/faults, which lets a caller arm the
+	// engine's failure-injection points at runtime. It drives the demo
+	// dashboard and is off by default: an endpoint that can make a payment
+	// API fail on demand has no business being reachable in production.
+	EnableFaultInjection bool
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 	// ShutdownTimeout bounds graceful shutdown.
@@ -55,20 +69,23 @@ type Config struct {
 // the docker-compose topology.
 func Default() Config {
 	return Config{
-		HTTPAddr:         ":8080",
-		DatabaseURL:      "postgres://payments:payments@localhost:5432/payments?sslmode=disable",
-		DatabaseMaxConns: 32,
-		KafkaBrokers:     []string{"localhost:9092"},
-		KafkaTopic:       "payments.events",
-		ConsumerGroup:    "settlement",
-		ClearingAccount:  "clearing",
-		FeeAccount:       "fees",
-		OutboxBatch:      128,
-		OutboxInterval:   50 * time.Millisecond,
-		OutboxLease:      30 * time.Second,
-		Bootstrap:        true,
-		LogLevel:         "info",
-		ShutdownTimeout:  15 * time.Second,
+		HTTPAddr:               ":8080",
+		DatabaseURL:            "postgres://payments:payments@localhost:5432/payments?sslmode=disable",
+		DatabaseMaxConns:       32,
+		KafkaBrokers:           []string{"localhost:9092"},
+		KafkaTopic:             "payments.events",
+		ConsumerGroup:          "settlement",
+		KafkaPartitions:        6,
+		KafkaReplicationFactor: 1,
+		CreateTopic:            true,
+		ClearingAccount:        "clearing",
+		FeeAccount:             "fees",
+		OutboxBatch:            128,
+		OutboxInterval:         50 * time.Millisecond,
+		OutboxLease:            30 * time.Second,
+		Bootstrap:              true,
+		LogLevel:               "info",
+		ShutdownTimeout:        15 * time.Second,
 	}
 }
 
@@ -116,6 +133,8 @@ func Load() (Config, error) {
 		*target = n
 	}
 	intVar("OUTBOX_BATCH", &cfg.OutboxBatch)
+	intVar("KAFKA_PARTITIONS", &cfg.KafkaPartitions)
+	intVar("KAFKA_REPLICATION_FACTOR", &cfg.KafkaReplicationFactor)
 	maxConns := int(cfg.DatabaseMaxConns)
 	intVar("DATABASE_MAX_CONNS", &maxConns)
 	cfg.DatabaseMaxConns = int32(maxConns)
@@ -136,14 +155,21 @@ func Load() (Config, error) {
 	durVar("OUTBOX_LEASE", &cfg.OutboxLease)
 	durVar("SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout)
 
-	if v, ok := os.LookupEnv("BOOTSTRAP_ACCOUNTS"); ok && v != "" {
+	boolVar := func(key string, target *bool) {
+		v, ok := os.LookupEnv(key)
+		if !ok || v == "" {
+			return
+		}
 		b, err := strconv.ParseBool(v)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("BOOTSTRAP_ACCOUNTS=%q is not a boolean", v))
-		} else {
-			cfg.Bootstrap = b
+			errs = append(errs, fmt.Sprintf("%s=%q is not a boolean", key, v))
+			return
 		}
+		*target = b
 	}
+	boolVar("BOOTSTRAP_ACCOUNTS", &cfg.Bootstrap)
+	boolVar("ENABLE_FAULT_INJECTION", &cfg.EnableFaultInjection)
+	boolVar("KAFKA_CREATE_TOPIC", &cfg.CreateTopic)
 
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("config: %s", strings.Join(errs, "; "))
@@ -166,6 +192,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: CONSUMER_GROUP is required")
 	case c.ClearingAccount == "":
 		return fmt.Errorf("config: CLEARING_ACCOUNT is required")
+	case c.KafkaPartitions <= 0:
+		return fmt.Errorf("config: KAFKA_PARTITIONS must be positive, got %d", c.KafkaPartitions)
+	case c.KafkaReplicationFactor <= 0:
+		return fmt.Errorf("config: KAFKA_REPLICATION_FACTOR must be positive, got %d", c.KafkaReplicationFactor)
 	case c.OutboxBatch <= 0:
 		return fmt.Errorf("config: OUTBOX_BATCH must be positive, got %d", c.OutboxBatch)
 	case c.DatabaseMaxConns <= 0:

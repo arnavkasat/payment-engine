@@ -27,7 +27,7 @@ type apiHarness struct {
 	store  *memory.Store
 	reg    *metrics.Registry
 
-	world, alice, bob uuid.UUID
+	world, alice, bob, clearing, fees uuid.UUID
 }
 
 func newAPI(t *testing.T) *apiHarness {
@@ -47,11 +47,11 @@ func newAPI(t *testing.T) *apiHarness {
 	h.world = mk("world", storage.KindExternal, true)
 	h.alice = mk("alice", storage.KindWallet, false)
 	h.bob = mk("bob", storage.KindWallet, false)
-	clearing := mk("clearing", storage.KindClearing, false)
-	fees := mk("fees", storage.KindRevenue, false)
+	h.clearing = mk("clearing", storage.KindClearing, false)
+	h.fees = mk("fees", storage.KindRevenue, false)
 
 	svc, err := payments.New(store, payments.Config{
-		Clearing: clearing, Fees: fees, External: h.world, Metrics: reg,
+		Clearing: h.clearing, Fees: h.fees, External: h.world, Metrics: reg,
 	})
 	if err != nil {
 		t.Fatalf("payments.New: %v", err)

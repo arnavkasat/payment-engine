@@ -215,6 +215,17 @@ func (s *Store) GetEntries(ctx context.Context, paymentID uuid.UUID) ([]ledger.E
 	return out, nil
 }
 
+// CountPaymentsByStatus tallies payments by status.
+func (s *Store) CountPaymentsByStatus(ctx context.Context) (map[storage.PaymentStatus]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := map[storage.PaymentStatus]int{}
+	for _, p := range s.st.payments {
+		counts[p.Status]++
+	}
+	return counts, nil
+}
+
 // LeaseOutbox claims unpublished messages whose lease has lapsed.
 func (s *Store) LeaseOutbox(ctx context.Context, owner string, limit int, lease time.Duration) ([]storage.OutboxMessage, error) {
 	s.mu.Lock()

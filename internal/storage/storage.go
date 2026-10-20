@@ -157,6 +157,9 @@ type Store interface {
 	GetPayment(ctx context.Context, id uuid.UUID) (Payment, error)
 	// GetEntries returns the journal entries written for a payment.
 	GetEntries(ctx context.Context, paymentID uuid.UUID) ([]ledger.Entry, error)
+	// CountPaymentsByStatus returns how many payments sit in each status.
+	// Statuses with no payments are absent from the map rather than zero.
+	CountPaymentsByStatus(ctx context.Context) (map[PaymentStatus]int, error)
 
 	// LeaseOutbox claims up to limit unpublished messages for the duration
 	// of lease, skipping rows another worker holds. A worker that dies

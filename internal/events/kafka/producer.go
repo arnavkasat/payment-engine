@@ -82,6 +82,12 @@ func NewProducer(cfg ProducerConfig) (*Producer, error) {
 			WriteTimeout: cfg.WriteTimeout,
 			Async:        false, // the caller must learn whether the write landed
 			Compression:  kafka.Snappy,
+			// kafka-go only asks the broker to auto-create a missing topic
+			// if this is set; without it a publish to a topic that does not
+			// exist fails with UNKNOWN_TOPIC_OR_PARTITION rather than
+			// creating it, however the broker is configured. EnsureTopic is
+			// the primary path — this is the fallback when it was not run.
+			AllowAutoTopicCreation: true,
 		},
 	}, nil
 }

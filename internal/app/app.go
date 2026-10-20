@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/arnavkasat/payment-engine/internal/config"
+	"github.com/arnavkasat/payment-engine/internal/faults"
 	"github.com/arnavkasat/payment-engine/internal/metrics"
 	"github.com/arnavkasat/payment-engine/internal/money"
 	"github.com/arnavkasat/payment-engine/internal/payments"
@@ -36,6 +38,10 @@ type App struct {
 	Metrics *metrics.Registry
 	Store   storage.Store
 	Service *payments.Service
+	// Faults is shared by the service, the publisher and the consumer, so
+	// arming a point affects the whole pipeline at once. It is nil unless
+	// EnableFaultInjection is set, and a nil injector never fires.
+	Faults *faults.Injector
 
 	Clearing uuid.UUID
 	Fees     uuid.UUID
@@ -69,6 +75,10 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	a := &App{Config: cfg, Log: log, Metrics: reg, Store: store}
+	if cfg.EnableFaultInjection {
+		a.Faults = faults.New(time.Now().UnixNano())
+		log.Warn("fault injection is enabled; /v1/faults can make this process fail on demand")
+	}
 	if cfg.Bootstrap {
 		if err := a.bootstrap(ctx); err != nil {
 			_ = store.Close()
@@ -84,6 +94,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		Clearing: a.Clearing,
 		Fees:     a.Fees,
 		External: a.External,
+		Faults:   a.Faults,
 		Metrics:  reg,
 	})
 	if err != nil {

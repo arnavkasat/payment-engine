@@ -51,12 +51,20 @@ path than a capture — one indexed lookup, no locks, no writes — so a high re
 throughput. Reporting a number achieved at `-retry-rate 0.9` without saying so would be
 dishonest.
 
+**The consumer's commit interval.** Settlement throughput is bounded by how often
+the consumer flushes offsets. The default batches them every 100ms; setting
+`CommitInterval` negative restores one synchronous broker round trip per message,
+which is roughly an order of magnitude slower and buys nothing the deduplication
+table does not already provide. See `docs/ARCHITECTURE.md`.
+
 **The settlement lag.** `cmd/loadgen` measures the synchronous capture path only. Settlement
 happens behind Kafka. To measure end-to-end, watch the clearing balance return to zero:
 
 ```sh
-watch -n1 "curl -s localhost:8080/v1/accounts | jq '.accounts[] | select(.name==\"clearing\") | .balance'"
+watch -n1 "curl -s localhost:8080/v1/ledger/snapshot | jq '{clearing: .clearing_balance, pending: .pending_outbox, awaiting: .in_flight}'"
 ```
+
+Or just open `http://localhost:8080` and watch the chart.
 
 ## Measured while building this
 
