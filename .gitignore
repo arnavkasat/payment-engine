@@ -1,0 +1,11 @@
+# Build output
+/bin/
+/dist/
+coverage.out
+coverage.html
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

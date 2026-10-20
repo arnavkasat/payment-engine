@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.24"
+
+jobs:
+  check:
+    name: Build, vet and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Formatting
+        run: make fmt-check
+
+      - name: Vet
+        run: make vet
+
+      - name: Build
+        run: make build
+
+      # The race detector matters more here than anywhere: the engine's
+      # whole claim is about what happens under concurrency.
+      - name: Unit tests
+        run: make test
+
+  integration:
+    name: PostgreSQL conformance and chaos
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: payments
+          POSTGRES_PASSWORD: payments
+          POSTGRES_DB: payments
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U payments -d payments"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # The same conformance suite the in-memory store passes, run against
+      # a real database. If the two ever diverge, this is where it shows.
+      - name: Storage conformance against PostgreSQL
+        run: make test-integration
+
+      # Failure injection against real transactions, real row locks and a
+      # real deferred constraint trigger.
+      - name: Chaos run against PostgreSQL
+        run: make chaos-postgres
+
+  end-to-end:
+    name: Full stack smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Start PostgreSQL, Kafka, the API and the worker
+        run: docker compose up --build -d
+
+      - name: Wait for the API
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/readyz > /dev/null; then
+              echo "api ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "api never became ready"
+          docker compose logs
+          exit 1
+
+      - name: Drive traffic through the whole pipeline
+        run: go run ./cmd/loadgen -url http://localhost:8080 -concurrency 16 -duration 20s -warmup 3s
+
+      - name: Wait for settlement to drain
+        run: |
+          # Every capture parks its amount in clearing and every settlement
+          # takes it out again, so a zero clearing balance means the Kafka
+          # round trip completed for every payment.
+          for i in $(seq 1 60); do
+            balance=$(curl -sf http://localhost:8080/v1/accounts |
+              python3 -c "import sys,json;print(next(a['balance'] for a in json.load(sys.stdin)['accounts'] if a['name']=='clearing'))")
+            echo "clearing balance: $balance"
+            if [ "$balance" = "0" ]; then exit 0; fi
+            sleep 2
+          done
+          echo "settlement did not drain"
+          docker compose logs worker
+          exit 1
+
+      - name: Verify ledger invariants
+        run: |
+          # The endpoint returns 500 if any invariant is violated, so -f is
+          # the assertion.
+          curl -sf http://localhost:8080/v1/ledger/invariants | python3 -m json.tool
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
