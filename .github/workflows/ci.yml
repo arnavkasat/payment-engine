@@ -108,19 +108,33 @@ jobs:
           docker compose logs
           exit 1
 
-      - name: The worker is running the worker, and found its topic
+      - name: The worker is running the worker, and started both halves
         run: |
-          docker compose ps
-          docker compose logs worker
           worker_id=$(docker compose ps -q worker)
           test "$(docker inspect -f '{{.State.Running}}' "$worker_id")" = "true"
+
           # The image's CMD is the API. If a future change turns it back
           # into an ENTRYPOINT, compose's `command:` would be appended as
           # arguments and this service would silently run a second API --
           # which is exactly what happened once.
           docker inspect -f '{{json .Config.Cmd}}' "$worker_id" | grep -q '/usr/local/bin/worker'
-          docker compose logs worker | grep -q "outbox publisher started"
-          docker compose logs worker | grep -q "settlement consumer started"
+
+          # The worker connects to PostgreSQL, applies migrations and
+          # creates its topic before either half starts, so wait for it to
+          # say so rather than racing it.
+          for i in $(seq 1 45); do
+            logs=$(docker compose logs worker)
+            if grep -q "outbox publisher started" <<<"$logs" &&
+               grep -q "settlement consumer started" <<<"$logs"; then
+              echo "$logs"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the worker never started both halves"
+          docker compose ps
+          docker compose logs worker
+          exit 1
 
       - name: The dashboard is served
         run: |
